@@ -12,6 +12,9 @@ CRAIGSLIST_RSS = [
     "https://bakersfield.craigslist.org/search/rea?format=rss&query=land|acre|owner%20financing&srchType=T",
     "https://bakersfield.craigslist.org/search/rea?format=rss&query=Tehachapi&srchType=T",
     "https://bakersfield.craigslist.org/search/rea?format=rss&query=Bakersfield&bundleDuplicates=1&hasPic=1&srchType=T",
+    # Alternate format — category-based RSS (some CL sites require /d/ path)
+    "https://bakersfield.craigslist.org/d/real-estate/search/reo?format=rss&query=owner&srchType=T",
+    "https://bakersfield.craigslist.org/d/real-estate/search/rea?format=rss&query=land&srchType=T",
 ]
 
 # Zillow FSBO search pages (free to browse, scraping via mobile API attempt)
@@ -22,10 +25,17 @@ ZILLOW_FSBO_URLS = [
     "https://www.zillow.com/homes/for_sale/93308_fsbo/",
 ]
 
-# Kern County public sources
-KERN_TAX_URL = "https://www.kcttc.co.kern.ca.us/tax-defaulted-property-sales/"
-KERN_RECORDER_URL = "https://recorder.kerncounty.com/"
-BAKERSFIELD_DATA_URL = "https://data.bakersfieldcity.us/"
+# Kern County Tax-Defaulted — current URLs (2026)
+# /tax-defaulted-property-sales/ is 404 — replaced by:
+# - General Tax Sale Info page
+# - Tax Sale Brochure PDF
+# - Top 10 Delinquent Parcels PDF
+KERN_TAX_URLS = [
+    "https://www.kcttc.co.kern.ca.us/index.cfm?fuseaction=kcttcinternet.showGeneralTaxSaleInfo",
+    "https://www.kcttc.co.kern.ca.us/Forms/taxsalebrochure.pdf",
+    "https://www.kcttc.co.kern.ca.us/forms/topten.pdf",
+]
+KERN_TAX_LIVE_AUCTION = "https://liveauctions.govease.com/PublicPortal/RegistrationDetail?AuctionID=1348&Edit=False/"
 
 # Scoring weights
 SCORE_KEYWORDS = {

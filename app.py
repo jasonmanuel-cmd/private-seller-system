@@ -164,6 +164,9 @@ label{font-size:10px;font-weight:700;letter-spacing:1px;text-transform:uppercase
 <label>Description / Why private? *</label><textarea class="input" name="description" rows="3" required placeholder="e.g., Divorce, inherited, as-is, needs work, owner in LA, wants private sale, no MLS, owner financing..."></textarea>
 <button type="submit" class="gold" style="width:100%;margin-top:8px">Add Lead & Score →</button>
 </form>
+
+<div style="margin-top:14px;padding:12px 14px;background:#fff;border:1px solid var(--border);border-left:4px solid var(--gold);border-radius:4px">
+<p style="font-size:12px;color:#4b585d;line-height:1.6;margin:0"><strong>Zillow note:</strong> Zillow blocks automated scraping (403). The Zillow FSBO leads above are daily manual-check reminders — open the link, filter Price Max $250k, sort Newest, look for as-is / motivated / estate / owner financing. Add good ones via the form below. Zillow FSBO sellers often underprice and want a private sale — exactly what Nathanael does.</p>
 </div>
 
 <div style="margin-top:28px;padding:24px;background:#fff;border:1px solid var(--border);border-radius:6px">
