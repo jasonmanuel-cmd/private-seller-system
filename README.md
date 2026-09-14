@@ -14,24 +14,29 @@ Auto-scrapes free sources to find private leads no one knows:
 
 **Live Dashboard:** Flask app at `app.py` — scores leads 1-10, filter by Hot 7+, city, source, add manual leads, export CSV.
 
-### Quick Start
-```bash
-pip install -r requirements.txt
-python run.py --once
-python app.py
-# Open http://localhost:5000
-```
+## How to Find Leads — Daily Routine (30 min morning)
+The system scrapes automatically, but you still close the loop manually. Here's your checklist:
 
-### Deploy to Render.com (Free Permanent URL) — 2 min
-1. Fork this repo on GitHub
-2. Go to https://dashboard.render.com → New → Web Service → Connect this repo
-3. Build Command: `pip install -r requirements.txt`
-4. Start Command: `python app.py`
-5. Instance Type: Free
-6. Deploy — you get permanent URL like https://private-seller-system.onrender.com
-7. For hourly scraper: Create second service → Background Worker → Start Command: `python run.py --loop`
+**Every morning (30 min)**
+1. Open dashboard at `http://localhost:5000` (or Render URL when deployed)
+2. Click **Run Scraper Now** — Craigslist RSS, Kern tax, code violations run automatically
+3. Check **Hot 7+** filter — these are your best leads (as-is, private sale, no MLS, probate, motivated, tax-defaulted)
+4. For each Hot lead: click **Skip Trace Free** (TruePeopleSearch) to get phone number
+5. Call or text — use phone scripts in `private-seller-system/`
 
-Or one-click deploy with `render.yaml` included.
+**Daily manual checks (10 min)**
+- Facebook Marketplace — Bakersfield/Tehachapi "owner" and "land" searches → Add via **Add Manual Lead** form
+- Facebook Groups — 5 local groups (Bakersfield Housing, Tehachapi Community, Kern County Real Estate, etc.) → Add leads via dashboard form
+- Craigslist — manual check of "by owner" and "land" if scraper returns 0 (Craigslist blocks automated RSS sometimes)
+
+**Weekly (1 hour)**
+- Kern County tax-defaulted auctions — check `https://www.kcttc.co.kern.ca.us/` for new sale lists
+- Probate leads — check county recorder/probate court
+- NOD (Notices of Default) — pre-foreclosure leads from county records
+- Driving for dollars — drive neighborhoods, note vacant/boarded homes, add via dashboard
+
+**How the Private Sale Program works**
+Homeowners who want privacy call Nathanael directly instead of listing on MLS. Private Sale Program handles: divorce, financial pressure, inherited property, bad tenants, houses needing work. One private walkthrough, no open houses, private offers from vetted 20+ buyer network. Close in 7-14 days cash. Legal in California using C.A.R. Form SELM (Seller Instruction to Exclude Listing from MLS).
 
 ## 2. Private Seller System (`/private-seller-system/`)
 - Landing page `/private-sale` (private-sale.html)
@@ -45,6 +50,31 @@ Or one-click deploy with `render.yaml` included.
 - `DEV_PLAYBOOK_HARBISON.md` — Fix Google + AI visibility for harbisonstandard.com
 - `llms.txt` — Upload to /public/llms.txt for ChatGPT/Perplexity
 - `harbison-seo-ai-plan.md` — 90-day SEO plan
+
+## Run Locally
+```bash
+pip install -r requirements.txt
+python run.py --once
+python app.py
+# Open http://localhost:5000
+```
+
+## Deploy to Render.com (Free Permanent URL)
+One-click deploy with `render.yaml` Blueprint — creates web dashboard + hourly scraper worker:
+1. Go to https://dashboard.render.com → New → Blueprint
+2. Connect this repo (`jasonmanuel-cmd/private-seller-system`)
+3. Apply `render.yaml` — creates `private-seller-dashboard` (web) + `private-seller-scraper` (worker)
+4. Dashboard at `https://private-seller-dashboard.onrender.com` (or similar)
+
+Or manually:
+1. Fork this repo on GitHub
+2. Render → New → Web Service → Connect repo
+3. Build: `pip install -r requirements.txt`
+4. Start: `python app.py`
+5. Free tier, deploy — permanent URL like `https://private-seller-system.onrender.com`
+6. Add hourly scraper: New → Background Worker → Start: `python run.py --loop`
+
+**Note:** Render free tier filesystem is ephemeral — `data/leads.db` resets on each deploy. Add a Render Disk (1GB free) mounted at `/app/data` or export CSV weekly to Google Sheets.
 
 ## Cost
 $0 to start. Optional $5/day FB ads, $0.70/letter handwritten mail.
