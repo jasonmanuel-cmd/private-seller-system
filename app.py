@@ -2,6 +2,7 @@
 Dashboard for No-MLS Lead Scraper — Harbison Standard
 Run: python app.py
 Open: http://localhost:5000
+Render: Uses PORT env var (10000)
 """
 from flask import Flask, render_template_string, request, jsonify, redirect
 import sys, os
@@ -136,7 +137,7 @@ label{font-size:12px;font-weight:700;color:#334155;margin-bottom:4px;display:blo
 <li><strong>Bakersfield Code / Vacant:</strong> Vacant/distressed houses from open data + driving for dollars</li>
 <li><strong>Manual:</strong> You add Facebook Marketplace, FB Groups, wholesaler emails, driving leads — all scored same system</li>
 <li><strong>Scoring:</strong> Keywords (as-is, estate, probate, private sale, no MLS, owner financing) + price + source type = 1-10 score. 7+ = call immediately</li>
-<li><strong>Next Steps:</strong> For each lead: Assessor lookup free (assessor.kerncounty.com) → TruePeopleSearch.com free phone → Call with private sale script (see private-seller-system/scripts.md)</li>
+<li><strong>Next Steps:</strong> For each lead: Assessor lookup free (assessor.kerncounty.com) → TruePeopleSearch.com free phone → Call with private sale script</li>
 </ol>
 <p style="margin-top:12px;font-size:13px;color:#8aa0b0">Free to run. No MLS. No paid APIs. Add Facebook leads manually (FB blocks scraping). Run scraper hourly via cron or Render.com free tier.</p>
 </div>
@@ -251,7 +252,13 @@ def export_csv():
     from flask import Response
     return Response(output.getvalue(), mimetype="text/csv", headers={"Content-Disposition": "attachment;filename=kern_private_leads.csv"})
 
+@app.route("/health")
+def health():
+    return jsonify({"status": "ok", "time": datetime.now().isoformat()})
+
 if __name__ == "__main__":
     init_db()
-    print("Starting dashboard at http://localhost:5000")
-    app.run(host="0.0.0.0", port=5000, debug=True)
+    port = int(os.environ.get("PORT", 5000))
+    print(f"Starting dashboard at http://0.0.0.0:{port}")
+    # Use 0.0.0.0 for Render, debug False for production
+    app.run(host="0.0.0.0", port=port, debug=False)
