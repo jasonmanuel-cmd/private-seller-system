@@ -18,12 +18,17 @@ def extract_price(text):
 
 def score_lead(title, description, price=0, source_type=""):
     text = f"{title} {description}".lower()
+    # Generic real-estate wording is not evidence of an inherited estate.
+    text = re.sub(r'\breal\s+estate\b', 'property', text)
+    def contains(keyword):
+        return re.search(r"(?<!\w)" + re.escape(keyword) + r"(?!\w)", text) is not None
+
     score = 0
     reasons = []
 
     # Keyword scoring
     for kw, pts in SCORE_KEYWORDS.items():
-        if kw in text:
+        if contains(kw):
             score += pts
             reasons.append(f"+{pts} {kw}")
 
@@ -72,21 +77,21 @@ def score_lead(title, description, price=0, source_type=""):
     
     # Determine motivation
     motivation = "unknown"
-    if any(k in text for k in ["tax", "delinquent"]):
+    if any(contains(k) for k in ["tax", "delinquent"]):
         motivation = "tax delinquent"
-    elif any(k in text for k in ["nod", "default", "foreclosure", "behind"]):
+    elif any(contains(k) for k in ["nod", "default", "foreclosure", "behind"]):
         motivation = "pre-foreclosure"
-    elif any(k in text for k in ["probate", "estate", "inherited", "trust sale"]):
+    elif any(contains(k) for k in ["probate", "estate", "inherited", "trust sale"]):
         motivation = "probate/inherited"
-    elif any(k in text for k in ["divorce"]):
+    elif any(contains(k) for k in ["divorce"]):
         motivation = "divorce"
-    elif any(k in text for k in ["absentee", "out of state", "tired landlord", "tenant"]):
+    elif any(contains(k) for k in ["absentee", "out of state", "tired landlord", "tenant"]):
         motivation = "tired landlord/absentee"
-    elif any(k in text for k in ["vacant", "abandoned", "code"]):
+    elif any(contains(k) for k in ["vacant", "abandoned", "code"]):
         motivation = "vacant/distressed"
-    elif any(k in text for k in ["fsbo", "by owner", "private sale", "no mls"]):
+    elif any(contains(k) for k in ["fsbo", "by owner", "private sale", "no mls"]):
         motivation = "private seller / FSBO"
-    elif any(k in text for k in ["as-is", "needs work", "tlc", "fixer"]):
+    elif any(contains(k) for k in ["as-is", "needs work", "tlc", "fixer"]):
         motivation = "distressed / as-is"
 
     return score, ", ".join(reasons), motivation

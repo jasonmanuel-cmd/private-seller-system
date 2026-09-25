@@ -1,87 +1,69 @@
 # Private Seller System — Harbison Standard
-**No MLS, $0 — Find Private Sellers Who Want to Sell Quietly**
 
-This repo contains:
+Private, local lead-research dashboard for Kern County, California. The maintained application is **the Python application at this repository root**. The `non-mls-deal-finder/` folder is an older prototype; `private-seller-system/` contains marketing drafts and standalone page assets, not another installed website.
 
-## 1. Lead Scraper System (`/` root)
-Auto-scrapes free sources to find private leads no one knows:
-- Craigslist Bakersfield RSS (FSBO)
-- Zillow FSBO (manual check URLs, auto-scoring)
-- Kern County Tax-Defaulted (300+ parcels $5k-20k)
-- Pre-Foreclosure NOD, Probate, Code Violations, Driving for Dollars
-- Facebook Marketplace + Groups (manual add via dashboard)
-- Wholesaler buyers lists
+## Open on this Windows computer
 
-**Live Dashboard:** Flask app at `app.py` — scores leads 1-10, filter by Hot 7+, city, source, add manual leads, export CSV.
+Double-click **Start Dashboard.cmd**, then open **http://127.0.0.1:5000**. Keep the terminal window open; Ctrl+C stops the server. The launcher uses the project-specific Python 3.11 environment, not the machine's potentially incompatible default Python.
 
-## How to Find Leads — Daily Routine (30 min morning)
-The system scrapes automatically, but you still close the loop manually. Here's your checklist:
+Manual setup (requires Python 3.11 or uv):
 
-**Every morning (30 min)**
-1. Open dashboard at `http://localhost:5000` (or Render URL when deployed)
-2. Click **Run Scraper Now** — Craigslist RSS, Kern tax, code violations run automatically
-3. Check **Hot 7+** filter — these are your best leads (as-is, private sale, no MLS, probate, motivated, tax-defaulted)
-4. For each Hot lead: click **Skip Trace Free** (TruePeopleSearch) to get phone number
-5. Call or text — use phone scripts in `private-seller-system/`
-
-**Daily manual checks (10 min)**
-- Facebook Marketplace — Bakersfield/Tehachapi "owner" and "land" searches → Add via **Add Manual Lead** form
-- Facebook Groups — 5 local groups (Bakersfield Housing, Tehachapi Community, Kern County Real Estate, etc.) → Add leads via dashboard form
-- Craigslist — manual check of "by owner" and "land" if scraper returns 0 (Craigslist blocks automated RSS sometimes)
-
-**Weekly (1 hour)**
-- Kern County tax-defaulted auctions — check `https://www.kcttc.co.kern.ca.us/` for new sale lists
-- Probate leads — check county recorder/probate court
-- NOD (Notices of Default) — pre-foreclosure leads from county records
-- Driving for dollars — drive neighborhoods, note vacant/boarded homes, add via dashboard
-
-**How the Private Sale Program works**
-Homeowners who want privacy call Nathanael directly instead of listing on MLS. Private Sale Program handles: divorce, financial pressure, inherited property, bad tenants, houses needing work. One private walkthrough, no open houses, private offers from vetted 20+ buyer network. Close in 7-14 days cash. Legal in California using C.A.R. Form SELM (Seller Instruction to Exclude Listing from MLS).
-
-## 2. Private Seller System (`/private-seller-system/`)
-- Landing page `/private-sale` (private-sale.html)
-- Direct mail letters (5 handwritten letters that get private sellers to call)
-- Facebook Ads ($5/day)
-- Phone scripts
-- Target lists (how to build absentee, senior, NOD, tax, probate lists for $0)
-- Full README with Private Sale Program playbook
-
-## 3. Dev Playbook
-- `DEV_PLAYBOOK_HARBISON.md` — Fix Google + AI visibility for harbisonstandard.com
-- `llms.txt` — Upload to /public/llms.txt for ChatGPT/Perplexity
-- `harbison-seo-ai-plan.md` — 90-day SEO plan
-
-## Run Locally
-```bash
-pip install -r requirements.txt
-python run.py --once
-python app.py
-# Open http://localhost:5000
+```text
+uv venv --python 3.11 .venv
+uv pip install --python .venv/Scripts/python.exe -r requirements.txt
+.venv/Scripts/python.exe serve.py
 ```
 
-## Deploy to Render.com (Free Permanent URL)
-One-click deploy with `render.yaml` Blueprint — creates web dashboard + hourly scraper worker:
-1. Go to https://dashboard.render.com → New → Blueprint
-2. Connect this repo (`jasonmanuel-cmd/private-seller-system`)
-3. Apply `render.yaml` — creates `private-seller-dashboard` (web) + `private-seller-scraper` (worker)
-4. Dashboard at `https://private-seller-dashboard.onrender.com` (or similar)
+On Linux/macOS, substitute `.venv/bin/python` for `.venv/Scripts/python.exe`.
 
-Or manually:
-1. Fork this repo on GitHub
-2. Render → New → Web Service → Connect repo
-3. Build: `pip install -r requirements.txt`
-4. Start: `python app.py`
-5. Free tier, deploy — permanent URL like `https://private-seller-system.onrender.com`
-6. Add hourly scraper: New → Background Worker → Start: `python run.py --loop`
+## What the system actually does
 
-**Note:** Render free tier filesystem is ephemeral — `data/leads.db` resets on each deploy. Add a Render Disk (1GB free) mounted at `/app/data` or export CSV weekly to Google Sheets.
+- Stores actual imported or manually entered property leads in SQLite.
+- Scores descriptions using keyword, source, and price heuristics. **A score is a research-priority signal, not a valuation, verified equity estimate, or proof of seller motivation.** Confirm details with the owner and authoritative records.
+- Filters leads, records contacted status, and exports CSV.
+- Offers on-demand source checking with visible progress and per-source outcomes.
+- Separates manual-research resources from real property leads. A search link or a tax-sale brochure is **not** a lead and must never inflate the hot-lead count.
 
-## Cost
-$0 to start. Optional $5/day FB ads, $0.70/letter handwritten mail.
+**Source limitations:** Craigslist may block requests or no longer serve RSS. Zillow may block automation. County source URLs and auction lists change; a generic PDF is not a verified parcel listing. Facebook, probate, recorder, and wholesaler research are manual unless an actual supported import is implemented. An empty database is an honest result, not permission to generate example properties. Do not bypass access controls.
+
+## Daily workflow
+
+1. Open the dashboard and run a source check. Read source errors, not just the lead count.
+2. Review actual leads using city/source/score filters; open the original record and confirm listing date, location, owner/agent status, and availability.
+3. For sources requiring manual research, open their resource links and add a specific property using **Add Manual Lead**. Include its real source URL and factual notes.
+4. Mark contacted only after outreach. Respect opt-outs, applicable calling/texting restrictions, and brokerage requirements. An assessor lookup or people-search link does not verify ownership or contact consent.
+5. Export CSV regularly. For a complete restorable backup, stop the app and copy the entire `data/` directory, including any SQLite companion files. Keep backups private.
+
+Do not promise a closing date, referral compensation, MLS exclusion, or marketing/legal compliance based only on the draft marketing documents. Obtain seller consent and brokerage/legal review for the actual transaction.
+
+## Storage and privacy
+
+Default database: `data/leads.db`, resolved relative to this project, not the shell working directory. Optional **DB_PATH** environment variable overrides it. Local storage survives restarts and deployments of files as long as that directory is preserved.
+
+The supported server (`serve.py`) binds only to **127.0.0.1** by default. Do not port-forward an unprotected dashboard. Public binding requires a **DASHBOARD_TOKEN** environment variable; set a durable **SECRET_KEY** for cloud sessions. Use HTTPS before sending authentication over a network. Keep these values in your host's secret settings, never in source control or URLs.
+
+CSV contains private research data. Share only with authorized recipients. Test fixtures are isolated from the real database.
+
+## Optional hosting — not deployed automatically
+
+`render.yaml` is an **optional paid** single-web-service deployment with a persistent disk. Review and approve current provider pricing before applying it. It intentionally does not launch a separate scraper worker: two independent SQLite files on two services would not share leads. On-demand scraping runs inside the dashboard process and writes to its disk.
+
+The previous instructions incorrectly described free persistent storage and a shared database across independent services. Do not use that setup. The historical handoff and marketing files may contain outdated claims; this README describes the supported root application.
+
+`Dockerfile` runs the same single-process server. Mount persistent storage at `/app/data` and supply `DASHBOARD_TOKEN`; the container refuses an unauthenticated public bind. Docker and Render require their own deployment verification; successful local tests do not prove a cloud deployment.
+
+For local scheduled runs, `run.py --once` checks sources once; `run.py --loop` checks hourly while the process remains running. This does not install an operating-system startup task. Do not run multiple scrape schedulers concurrently.
+
+## Verification
+
+```text
+.venv/Scripts/python.exe -m unittest discover -s tests -v
+.venv/Scripts/python.exe -m compileall -q app.py database.py config.py scoring.py run.py serve.py scrapers
+```
+
+`GET /health` checks server/database readiness. Source availability is separate: inspect dashboard source results. This downloaded folder is not necessarily a Git checkout; no GitHub push or deployment is implied by local file changes.
 
 ## Owner
-Nathanael Harbison, REALTOR® DRE #02059393, Harbison Standard, Kern County
-Phone: (661) 472-7499
 
-## License
-Private — for Harbison Standard use
+Nathanael Harbison, REALTOR®, DRE #02059393 — Harbison Standard, Kern County.
+(661) 472-7499 · nate85.realtor@gmail.com

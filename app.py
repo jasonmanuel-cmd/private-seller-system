@@ -4,13 +4,73 @@ Matches main site: navy #031c2b, gold #edc66f, fonts Libre Caslon Display + Open
 Run: python app.py
 Render: Uses PORT env var
 """
-from flask import Flask, render_template_string, request, jsonify, redirect
+from flask import Flask, render_template_string, request, jsonify, redirect, session, Response
+import secrets
+import threading
+from copy import deepcopy
+from contextlib import closing
 import sys, os
 sys.path.append(os.path.dirname(__file__))
-from database import get_leads, get_stats, get_conn, init_db
+from database import get_leads, get_stats, get_conn, init_db, get_recent_scrapes, load_last_run_summary
 from datetime import datetime
+from uuid import uuid4
+from urllib.parse import urlsplit
+
+
+def safe_url(value):
+    """Only absolute HTTP(S) links, including for previously stored leads."""
+    if not value or any(ord(c) < 33 for c in value) or '\\' in value:
+        return False
+    try:
+        parsed = urlsplit(value)
+        return parsed.scheme in ('http', 'https') and bool(parsed.hostname) and not parsed.username and not parsed.password
+    except ValueError:
+        return False
 
 app = Flask(__name__)
+_app_secret = os.environ.get("SECRET_KEY", "").strip()
+app.config.update(
+    SECRET_KEY=_app_secret or secrets.token_urlsafe(48),
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SAMESITE='Lax',
+    SESSION_COOKIE_SECURE=bool(os.environ.get('RENDER')),
+    MAX_CONTENT_LENGTH=1024 * 1024,
+)
+
+
+@app.before_request
+def prepare_database():
+    token = os.environ.get('DASHBOARD_TOKEN', '')
+    if os.environ.get('RENDER') and not token:
+        return jsonify(error='Dashboard disabled: configure DASHBOARD_TOKEN'), 503
+    if token:
+        auth = request.authorization
+        if not auth or auth.type != 'basic' or not secrets.compare_digest((auth.password or '').encode(), token.encode()):
+            return Response('Authentication required', 401, {'WWW-Authenticate': 'Basic realm="Private dashboard"'})
+    elif urlsplit(request.host_url).hostname not in ('localhost', '127.0.0.1', '::1'):
+        return jsonify(error='Local access only without DASHBOARD_TOKEN'), 403
+    if request.method not in ('GET', 'HEAD', 'OPTIONS'):
+        origin = request.headers.get('Origin')
+        referer = request.headers.get('Referer')
+        expected = urlsplit(request.host_url)
+        supplied = urlsplit(origin or referer or request.host_url)
+        if request.headers.get('Sec-Fetch-Site') == 'cross-site' or (supplied.scheme, supplied.netloc) != (expected.scheme, expected.netloc):
+            return jsonify(error='Cross-origin request rejected'), 403
+        csrf = request.headers.get('X-CSRF-Token') or request.form.get('csrf_token', '')
+        if not csrf or not secrets.compare_digest(csrf.encode(), session.get('csrf_token', '').encode()):
+            return jsonify(error='Invalid CSRF token; refresh the dashboard'), 403
+    if 'csrf_token' not in session:
+        session['csrf_token'] = secrets.token_urlsafe(32)
+    init_db()
+
+
+@app.after_request
+def private_response(response):
+    response.headers['Cache-Control'] = 'no-store'
+    response.headers['X-Content-Type-Options'] = 'nosniff'
+    response.headers['X-Frame-Options'] = 'DENY'
+    response.headers['Referrer-Policy'] = 'no-referrer'
+    return response
 
 DASHBOARD_HTML = """
 <!doctype html>
@@ -85,6 +145,7 @@ label{font-size:10px;font-weight:700;letter-spacing:1px;text-transform:uppercase
 .site-footer{margin-top:18px;background:var(--navy);color:white;display:flex;align-items:center;justify-content:space-between;padding:18px 3.8%;border-top:1px solid #9f8038;border-radius:4px}
 .site-footer p{text-transform:uppercase;letter-spacing:1px;font-size:8px}
 @media(max-width:900px){.stats{grid-template-columns:repeat(2,1fr)}.page-heading h1{font-size:42px}header{height:80px}.brand{width:200px}nav{display:none}.row{grid-template-columns:1fr}.closing{flex-direction:column;align-items:flex-start;gap:20px}}
+@media(max-width:480px){.filters{flex-direction:column}.stats{grid-template-columns:1fr}.page-heading h1{font-size:34px}.page-lede{font-size:14px}.form-wrap{padding:20px}.closing{padding:30px 6.1% 20px 6.1%}}
 </style>
 </head>
 <body>
@@ -106,7 +167,8 @@ label{font-size:10px;font-weight:700;letter-spacing:1px;text-transform:uppercase
 <h1>Private leads <em>no one knows how to find.</em></h1>
 <p class="page-lede">Off-market deals in Kern County — tax-defaulted, pre-foreclosure, probate, FSBO, vacant, Facebook, wholesaler — scored 1-10 for deal quality. Same system Nathanael uses to find private sellers who want to sell quietly without MLS.</p>
 <div style="display:flex;gap:12px;margin-top:18px;flex-wrap:wrap">
-<a class="gold" href="/run">▶ Run Scraper Now</a>
+<form method="POST" action="/run" id="run-form" style="display:inline"><input type="hidden" name="csrf_token" value="{{session['csrf_token']}}"><button type="submit" class="gold" {% if run_status.running %}disabled{% endif %}>{{ 'Checking sources…' if run_status.running else '▶ Run Scraper Now' }}</button></form>
+{% if run_status.running %}<p role="status">Source check running. Refresh this page to see updated results.</p>{% endif %}
 <a class="text-link" href="/export"><span>⬇ Export CSV</span></a>
 <a class="text-link" href="https://www.harbisonstandard.com/private-sale"><span>Private Sale Program →</span></a>
 </div>
@@ -127,9 +189,23 @@ label{font-size:10px;font-weight:700;letter-spacing:1px;text-transform:uppercase
 <a href="/?city=Bakersfield" class="{{'active' if city_filter=='Bakersfield' else ''}}">Bakersfield</a>
 <a href="/?city=California%20City" class="{{'active' if city_filter=='California City' else ''}}">California City</a>
 <a href="/?source=craigslist" class="{{'active' if source_filter=='craigslist' else ''}}">Craigslist</a>
+<a href="/?source=newspaper_auction" class="{{'active' if source_filter=='newspaper_auction' else ''}}">Auction Notices</a>
 <a href="/?source=kern_tax" class="{{'active' if source_filter=='kern_tax' else ''}}">Tax-Defaulted</a>
 <a href="/?source=kern_recorder" class="{{'active' if source_filter=='kern_recorder' else ''}}">Pre-Foreclosure</a>
 </div>
+{% if run_status.recent_logs %}
+<section class="recent-run" id="run-status" style="margin-top:24px">
+  <h2 class="eyebrow">Recent source runs</h2>
+  <p class="page-lede" style="margin:6px 0 14px">Most recent source outcomes are listed below. A source page, brochure, or auction portal is research material, not a lead. Scores are heuristics for research priority, not valuations.</p>
+  {% for log in run_status.recent_logs %}
+  <article class="card {{ 'hot' if log.status == 'blocked' else 'warm' if log.status == 'manual_only' else 'cold' }}">
+    <div class="meta"><span class="badge badge-source">{{ log.source }}</span><span>{{ log.status }}</span><span>{{ log.created_at[:16] }}</span></div>
+    <div class="desc">Found {{ log.found }} | New {{ log.new_leads }}</div>
+    {% if log.error %}<p style="font-size:12px;color:#7c8590;margin-top:4px">{{ log.error }}</p>{% endif %}
+  </article>
+  {% endfor %}
+</section>
+{% endif %}
 
 {% for lead in leads %}
 <article class="card {{'hot' if lead['deal_score']>=7 else 'warm' if lead['deal_score']>=5 else 'cold'}}">
@@ -142,10 +218,10 @@ label{font-size:10px;font-weight:700;letter-spacing:1px;text-transform:uppercase
 </div>
 <div class="desc">{{lead['description'][:600]}}</div>
 <div class="actions">
-<a class="btn btn-gold" href="{{lead['link']}}" target="_blank">View Original →</a>
-<a class="btn" href="https://www.truepeoplesearch.com/results?name={{lead['address'][:20]}}" target="_blank">Skip Trace Free</a>
-<a class="btn" href="https://assessor.kerncounty.com/parcel-search/" target="_blank">Assessor Lookup</a>
-<a class="btn btn-dark" href="#" onclick="markContacted('{{lead['id']}}');return false;">Mark Contacted</a>
+{% if safe_url(lead['link']) %}<a class="btn btn-gold" href="{{lead['link']}}" target="_blank" rel="noopener noreferrer">View Original →</a>{% endif %}
+<a class="btn" href="https://assessor.kerncounty.com/parcel-search/" target="_blank" rel="noopener noreferrer">Assessor Lookup</a>
+<button class="btn btn-dark contact-button" type="button" data-lead-id="{{lead['id']}}">Mark Contacted</button>
+<span class="contact-error" role="alert"></span>
 </div>
 </article>
 {% endfor %}
@@ -158,6 +234,7 @@ label{font-size:10px;font-weight:700;letter-spacing:1px;text-transform:uppercase
 <h3>Add manual private lead</h3>
 <p class="small">Found a lead on Facebook Marketplace, driving for dollars, wholesaler email, or referral? Add it here — it will be scored automatically 1-10 using same system (private sale, as-is, estate, tax-defaulted keywords).</p>
 <form method="POST" action="/add">
+<input type="hidden" name="csrf_token" value="{{session['csrf_token']}}">
 <div class="row"><div><label>Address *</label><input class="input" name="address" required placeholder="123 Main St, Bakersfield"></div><div><label>City *</label><input class="input" name="city" required placeholder="Bakersfield"></div></div>
 <div class="row"><div><label>Price</label><input class="input" name="price" type="number" placeholder="150000"></div><div><label>Source *</label><select class="input" name="source"><option value="facebook">Facebook Marketplace/Group</option><option value="driving">Driving for Dollars</option><option value="referral">Referral ($500)</option><option value="wholesaler">Wholesaler</option><option value="zillow_fsbo">Zillow FSBO</option><option value="craigslist">Craigslist</option><option value="other">Other</option></select></div></div>
 <label>Link (Facebook post, Zillow link, etc)</label><input class="input" name="link" placeholder="https://...">
@@ -166,21 +243,19 @@ label{font-size:10px;font-weight:700;letter-spacing:1px;text-transform:uppercase
 </form>
 
 <div style="margin-top:14px;padding:12px 14px;background:#fff;border:1px solid var(--border);border-left:4px solid var(--gold);border-radius:4px">
-<p style="font-size:12px;color:#4b585d;line-height:1.6;margin:0"><strong>Zillow note:</strong> Zillow blocks automated scraping (403). The Zillow FSBO leads above are daily manual-check reminders — open the link, filter Price Max $250k, sort Newest, look for as-is / motivated / estate / owner financing. Add good ones via the form below. Zillow FSBO sellers often underprice and want a private sale — exactly what Nathanael does.</p>
+<p style="font-size:12px;color:#4b585d;line-height:1.6;margin:0"><strong>Zillow note:</strong> zillow.com blocks automated scraping (403). Zillow FSBO listings are a manual research resource, not leads in this dashboard — open the link, filter Price Max $250k, sort Newest, look for as-is / motivated / estate / owner financing, and add promising owners via the form below.</p>
 </div>
 
 <div style="margin-top:28px;padding:24px;background:#fff;border:1px solid var(--border);border-radius:6px">
-<h3 style="font-size:22px;color:var(--navy);margin-bottom:8px">How to find leads this system finds</h3>
-<p style="font-size:13px;color:#4b585d;line-height:1.6">This dashboard aggregates ALL free sources no MLS. Here's how to work it daily (30 min):</p>
+<h3 style="font-size:22px;color:var(--navy);margin-bottom:8px">Manual research resources</h3>
+<p style="font-size:13px;color:#4b585d;line-height:1.6">These are research materials and starting points, not deal listings and not a valuation. Confirm every detail with the owner, listing, and county records before outreach.</p>
 <ol style="margin:16px 0 0 18px;font-size:13px;line-height:1.7;color:#4b585d">
-<li><strong>Morning 6am:</strong> Click "Run Scraper Now" — scrapes Craigslist RSS (by owner), Zillow FSBO, tax-defaulted PDFs, code violations</li>
-<li><strong>Score 7+ = HOT:</strong> Call immediately via TruePeopleSearch.com free phone — use private sale script from private-seller-system/scripts.md</li>
-<li><strong>Facebook 10 min:</strong> Marketplace search "Tehachapi land", "Bakersfield house for sale by owner" + 5 FB Groups → Add via form below → auto-scored</li>
-<li><strong>Weekly county check:</strong> Kern Tax-Defaulted (kcttc.co.kern.ca.us), Recorder NOD (recorder.kerncounty.com), Court Probate (kern.courts.ca.gov) → Add manually</li>
-<li><strong>Driving 1hr/week:</strong> Golden Hills, Bear Valley, Oildale — overgrown, boarded, tarp roof → Add via form → Assessor lookup free</li>
-<li><strong>Wholesalers:</strong> Join 10 Bakersfield wholesaler buyers lists (free) — they email you 70% ARV deals → Add via form</li>
+<li><strong>Zillow FSBO:</strong> zillow.com — browse Bakersfield/Tehachapi/California City FSBO listings, filter Price Max $250k, sort Newest. Add promising owners manually via the form below.</li>
+<li><strong>Facebook Marketplace:</strong> facebook.com/marketplace — search "Tehachapi land", "Bakersfield house for sale by owner" + local groups → Add via form → auto-scored.</li>
+<li><strong>County records:</strong> Kern Tax-Defaulted (kcttc.co.kern.ca.us), Recorder NOD (recorder.kerncounty.com), Court Probate (kern.courts.ca.gov) → Add manually.</li>
+<li><strong>Driving for dollars:</strong> Golden Hills, Bear Valley, Oildale — overgrown, boarded, tarp roof → Add via form → Assessor lookup free.</li>
 </ol>
-<p style="margin-top:14px;font-size:12px;color:#7c8590">All leads saved in data/leads.db (SQLite). Export CSV anytime. On Render free tier, DB resets on deploy — export CSV weekly to Google Sheets as backup.</p>
+<p style="margin-top:14px;font-size:12px;color:#7c8590">All leads saved in data/leads.db (SQLite). Export CSV anytime.</p>
 </div>
 
 <div class="closing"><a href="https://www.harbisonstandard.com/" aria-label="Harbison Standard home"><img class="footer-logo" src="https://www.harbisonstandard.com/assets/logo.webp" alt="Harbison Standard"></a><div><p class="motto">It's not what you do,<br><em>it's how you do it.</em></p><a class="gold" href="https://www.harbisonstandard.com/contact">Let's talk</a></div></div>
@@ -188,9 +263,18 @@ label{font-size:10px;font-weight:700;letter-spacing:1px;text-transform:uppercase
 
 </div>
 <script>
-function markContacted(id){
-  fetch('/mark_contacted/'+id, {method:'POST'}).then(()=>location.reload());
+const csrfToken = {{session['csrf_token']|tojson}};
+async function markContacted(button){
+  const error = button.parentElement.querySelector('.contact-error');
+  error.textContent = '';
+  button.disabled = true;
+  try {
+    const response = await fetch('/mark_contacted/'+encodeURIComponent(button.dataset.leadId), {method:'POST', headers:{'X-CSRF-Token':csrfToken}});
+    if (!response.ok) throw new Error('Could not update lead (HTTP '+response.status+'). Refresh and try again.');
+    location.reload();
+  } catch (err) { error.textContent = err.message; button.disabled = false; }
 }
+document.querySelectorAll('.contact-button').forEach(button => button.addEventListener('click', () => markContacted(button)));
 </script>
 </body>
 </html>
@@ -198,7 +282,12 @@ function markContacted(id){
 
 @app.route("/")
 def index():
-    min_score = int(request.args.get("min_score", 0))
+    try:
+        min_score = int(request.args.get("min_score", 0))
+        if not 0 <= min_score <= 10:
+            raise ValueError
+    except ValueError:
+        return jsonify(error="min_score must be an integer from 0 to 10"), 400
     city_filter = request.args.get("city", "")
     source_filter = request.args.get("source", "")
     
@@ -221,29 +310,99 @@ def index():
     leads = c.fetchall()
     conn.close()
     
-    return render_template_string(DASHBOARD_HTML, leads=leads, stats=stats, min_score=min_score, city_filter=city_filter, source_filter=source_filter)
+    return render_template_string(
+        DASHBOARD_HTML,
+        leads=leads,
+        stats=stats,
+        min_score=min_score,
+        city_filter=city_filter,
+        source_filter=source_filter,
+        safe_url=safe_url,
+        run_status=get_run_status(),
+        recent_logs=get_recent_scrapes(limit=8),
+        now_iso=datetime.now().isoformat(),
+    )
 
-@app.route("/run")
+_run_lock = threading.Lock()
+_run_state = dict(running=False, status='idle', started_at=None, finished_at=None, results={}, error=None)
+
+
+def _background_run():
+    try:
+        from run import run_all
+        results = run_all()
+        if not isinstance(results, dict) or not results:
+            raise RuntimeError('Scraper returned no source outcomes')
+        failed = any(r.get('err') or r.get('errors') or r.get('error') for r in results.values())
+        with _run_lock:
+            _run_state.update(results=results, status='completed_with_errors' if failed else 'completed')
+    except Exception as exc:
+        # No traceback or exception text in logs: upstream messages may contain credentials.
+        with _run_lock:
+            _run_state.update(status='failed', error=f'{type(exc).__name__}: scraper run failed; inspect source outcomes')
+    finally:
+        with _run_lock:
+            _run_state.update(running=False, finished_at=datetime.now().isoformat())
+
+
+def get_run_status():
+    with _run_lock:
+        state = deepcopy(_run_state)
+    with closing(get_conn()) as conn:
+        logs = [dict(row) for row in conn.execute('SELECT * FROM scrape_log ORDER BY id DESC LIMIT 20')]
+    for log in logs:
+        error = (log.get('error') or '').lower()
+        log['status'] = ('blocked' if any(word in error for word in ('403', '429', 'blocked', 'captcha'))
+                         else 'manual_only' if 'manual' in error else 'error' if error else 'completed')
+    state['recent_logs'] = logs
+    return state
+
+
+@app.route('/scrape-status')
+def scrape_status():
+    return jsonify(get_run_status())
+
+
+@app.route("/run", methods=['POST'])
 def run_scraper():
-    import subprocess
-    subprocess.Popen(["python", "run.py", "--once"], cwd=os.path.dirname(__file__))
-    return redirect("/?min_score=5")
+    with _run_lock:
+        if _run_state['running']:
+            return jsonify(error='A scraper run is already active'), 409
+        _run_state.update(running=True, status='running', started_at=datetime.now().isoformat(),
+                          finished_at=None, results={}, error=None)
+        try:
+            threading.Thread(target=_background_run, name='dashboard-scraper', daemon=True).start()
+        except Exception:
+            _run_state.update(running=False, status='failed', error='Could not start scraper thread')
+            return jsonify(error='Could not start scraper thread'), 500
+    if request.accept_mimetypes.best == 'text/html':
+        return redirect('/', code=303)
+    return jsonify(status='running', status_url='/scrape-status'), 202
 
 @app.route("/add", methods=["POST"])
 def add_manual():
     from scoring import score_lead
     from database import upsert_lead
-    address = request.form.get("address", "")
-    city = request.form.get("city", "")
-    price = int(request.form.get("price") or 0)
-    source = request.form.get("source", "manual")
-    link = request.form.get("link", "")
-    description = request.form.get("description", "")
+    address = request.form.get("address", "").strip()
+    city = request.form.get("city", "").strip()
+    source = request.form.get("source", "").strip()
+    link = request.form.get("link", "").strip()
+    description = request.form.get("description", "").strip()
+    if not all((address, city, source, description)):
+        return jsonify(error="Address, city, source and description are required"), 400
+    try:
+        price = int(request.form.get("price", "").strip() or 0)
+        if not 0 <= price <= 9223372036854775807:
+            raise ValueError
+    except ValueError:
+        return jsonify(error="Price must be a non-negative whole number within the supported range"), 400
+    if link and not safe_url(link):
+        return jsonify(error="Link must be an absolute http:// or https:// URL"), 400
     
     score, reasons, motivation = score_lead(address, description, price, source)
     
     lead = {
-        "id": f"manual_{address}_{datetime.now().isoformat()}",
+        "id": f"manual_{uuid4().hex}",
         "address": address,
         "city": city,
         "price": price,
@@ -272,7 +431,15 @@ def mark_contacted(lead_id):
     c.execute("UPDATE leads SET status='contacted', updated_at=? WHERE id=?", (datetime.now().isoformat(), lead_id))
     conn.commit()
     conn.close()
+    if c.rowcount == 0:
+        return jsonify(error="Lead not found"), 404
     return jsonify({"ok": True})
+
+def csv_safe(value):
+    if isinstance(value, str) and (value.lstrip().startswith(('=', '+', '-', '@')) or value.startswith(('\t', '\r', '\n'))):
+        return "'" + value
+    return value
+
 
 @app.route("/export")
 def export_csv():
@@ -289,7 +456,7 @@ def export_csv():
     writer = csv.writer(output)
     writer.writerow(rows[0].keys() if rows else ["id","address","city","price","source","link","description","motivation","deal_score"])
     for r in rows:
-        writer.writerow([r[k] for k in r.keys()])
+        writer.writerow([csv_safe(r[k]) for k in r.keys()])
     
     from flask import Response
     return Response(output.getvalue(), mimetype="text/csv", headers={"Content-Disposition": "attachment;filename=kern_private_leads.csv"})
