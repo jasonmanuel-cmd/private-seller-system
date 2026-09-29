@@ -4,14 +4,18 @@ Matches main site: navy #031c2b, gold #edc66f, fonts Libre Caslon Display + Open
 Run: python app.py
 Render: Uses PORT env var
 """
-from flask import Flask, render_template_string, request, jsonify, redirect, session, Response
+from flask import Flask, render_template_string, request, jsonify, redirect, session, Response, send_from_directory
 import secrets
 import threading
 from copy import deepcopy
 from contextlib import closing
 import sys, os
 sys.path.append(os.path.dirname(__file__))
-from database import get_leads, get_stats, get_conn, init_db, get_recent_scrapes, load_last_run_summary
+from database import (get_leads, get_stats, get_conn, init_db, get_recent_scrapes,
+                      load_last_run_summary, get_latest_property_analyses,
+                      get_latest_property_analysis, get_property_observations,
+                      get_property_events)
+from config import REPORT_DIR
 from datetime import datetime
 from uuid import uuid4
 from urllib.parse import urlsplit
@@ -26,6 +30,18 @@ def safe_url(value):
         return parsed.scheme in ('http', 'https') and bool(parsed.hostname) and not parsed.username and not parsed.password
     except ValueError:
         return False
+
+
+PRIVATE_KEYS = {'owner_name', 'owner_mailing', 'raw_data', 'phone', 'email', 'contact'}
+
+
+def public_data(value):
+    """Recursively remove contact/private raw fields from read APIs."""
+    if isinstance(value, dict):
+        return {key: public_data(item) for key, item in value.items() if key.lower() not in PRIVATE_KEYS}
+    if isinstance(value, list):
+        return [public_data(item) for item in value]
+    return value
 
 app = Flask(__name__)
 _app_secret = os.environ.get("SECRET_KEY", "").strip()
@@ -47,7 +63,8 @@ def prepare_database():
         auth = request.authorization
         if not auth or auth.type != 'basic' or not secrets.compare_digest((auth.password or '').encode(), token.encode()):
             return Response('Authentication required', 401, {'WWW-Authenticate': 'Basic realm="Private dashboard"'})
-    elif urlsplit(request.host_url).hostname not in ('localhost', '127.0.0.1', '::1'):
+    elif (request.remote_addr not in ('127.0.0.1', '::1') or
+          urlsplit(request.host_url).hostname not in ('localhost', '127.0.0.1', '::1')):
         return jsonify(error='Local access only without DASHBOARD_TOKEN'), 403
     if request.method not in ('GET', 'HEAD', 'OPTIONS'):
         origin = request.headers.get('Origin')
@@ -181,6 +198,30 @@ label{font-size:10px;font-weight:700;letter-spacing:1px;text-transform:uppercase
 <div class="stat"><span>{{stats.by_source.get('craigslist',0) + stats.by_source.get('facebook',0)}}</span><p>FSBO + Private</p></div>
 </div>
 
+<section class="card" aria-labelledby="intelligence-heading">
+<h2 id="intelligence-heading" style="font-size:26px;color:var(--navy)">Property Intelligence</h2>
+<p class="desc">Evidence-adjusted opportunities. UNKNOWN means the necessary fact has not been verified.</p>
+<div class="meta">
+<span class="badge badge-hot">Top {{intelligence_counts.top}}</span>
+<span class="badge badge-warm">Watchlist {{intelligence_counts.watchlist}}</span>
+<span class="badge badge-source">Rejected {{intelligence_counts.rejected}}</span>
+</div>
+<div class="actions">
+<a class="btn btn-dark" href="/reports/top-10.csv">Top 10 CSV</a>
+<a class="btn" href="/reports/top-3-deep-dive.csv">Top 3 Deep Dive</a>
+<a class="btn" href="/reports/watchlist.csv">Watchlist</a>
+<a class="btn" href="/reports/rejected.csv">Rejected</a>
+<a class="btn" href="/reports/change-events.csv">Change Events</a>
+</div>
+{% for item in intelligence_top %}
+<div class="card {{'hot' if item.score >= 75 else 'warm'}}" style="margin-top:14px">
+<div class="title">{{item.address}}</div>
+<div class="meta"><span class="badge badge-hot">{{item.score}} / 100</span><span>Confidence {{item.confidence_grade}}</span><span>{{item.city}}</span></div>
+<p class="desc">Next verification: {{item.next_action}}</p>
+</div>
+{% endfor %}
+</section>
+
 <div class="filters">
 <a href="/?min_score=0" class="{{'active' if min_score==0 else ''}}">All ({{stats.total}})</a>
 <a href="/?min_score=7" class="{{'active' if min_score==7 else ''}}">🔥 Hot 7+ ({{stats.hot}})</a>
@@ -309,6 +350,14 @@ def index():
     c.execute(query, params)
     leads = c.fetchall()
     conn.close()
+    intelligence = [row['analysis'] for row in get_latest_property_analyses()]
+    intelligence_counts = {
+        'top': sum(item.get('decision') == 'top' for item in intelligence),
+        'watchlist': sum(item.get('decision') == 'watchlist' for item in intelligence),
+        'rejected': sum(item.get('decision') == 'rejected' for item in intelligence),
+    }
+    intelligence_top = sorted((item for item in intelligence if item.get('decision') == 'top'),
+                              key=lambda item: (-item.get('score', 0), str(item.get('property_id', ''))))[:3]
     
     return render_template_string(
         DASHBOARD_HTML,
@@ -321,7 +370,54 @@ def index():
         run_status=get_run_status(),
         recent_logs=get_recent_scrapes(limit=8),
         now_iso=datetime.now().isoformat(),
+        intelligence_counts=intelligence_counts,
+        intelligence_top=intelligence_top,
     )
+
+
+@app.route('/api/intelligence')
+def intelligence_api():
+    bucket = request.args.get('bucket', 'all')
+    allowed = {'all': None, 'top10': 'top', 'top3': 'top', 'watchlist': 'watchlist', 'rejected': 'rejected'}
+    if bucket not in allowed:
+        return jsonify(error='bucket must be all, top10, top3, watchlist, or rejected'), 400
+    rows = [row['analysis'] for row in get_latest_property_analyses()]
+    decision = allowed[bucket]
+    if decision:
+        rows = [row for row in rows if row.get('decision') == decision]
+    rows.sort(key=lambda row: (-row.get('score', 0), str(row.get('property_id', ''))))
+    if bucket == 'top10':
+        rows = rows[:10]
+    elif bucket == 'top3':
+        rows = rows[:3]
+    return jsonify(items=public_data(rows), count=len(rows))
+
+
+@app.route('/api/properties/<property_id>/history')
+def property_history_api(property_id):
+    return jsonify(items=public_data(get_property_observations(property_id)), property_id=property_id)
+
+
+@app.route('/api/properties/<property_id>/analysis')
+def property_analysis_api(property_id):
+    row = get_latest_property_analysis(property_id)
+    if not row:
+        return jsonify(error='Analysis not found'), 404
+    return jsonify(public_data(row['analysis']))
+
+
+@app.route('/api/events')
+def events_api():
+    return jsonify(items=public_data(get_property_events(limit=500)))
+
+
+@app.route('/reports/<report_name>')
+def report_download(report_name):
+    allowed = {'top-10.csv', 'top-3-deep-dive.csv', 'watchlist.csv', 'rejected.csv',
+               'change-events.csv', 'intelligence-report.md'}
+    if report_name not in allowed:
+        return jsonify(error='Report not found'), 404
+    return send_from_directory(REPORT_DIR, report_name, as_attachment=True)
 
 _run_lock = threading.Lock()
 _run_state = dict(running=False, status='idle', started_at=None, finished_at=None, results={}, error=None)

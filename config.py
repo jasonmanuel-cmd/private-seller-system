@@ -23,8 +23,26 @@ Scoring:
 """
 import os
 
+
+def _env_int(name, default, minimum=0, maximum=None):
+    raw = os.environ.get(name, str(default))
+    try:
+        value = int(raw)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{name} must be an integer") from exc
+    if value < minimum or (maximum is not None and value > maximum):
+        ceiling = f" and at most {maximum}" if maximum is not None else ""
+        raise ValueError(f"{name} must be at least {minimum}{ceiling}")
+    return value
+
 # Database path can be overridden for tests or hosted disk mounts (e.g. Render volume).
 DB_PATH = os.environ.get("DB_PATH") or os.path.join(os.path.dirname(__file__), "data", "leads.db")
+REPORT_DIR = os.environ.get("REPORT_DIR") or os.path.join(os.path.dirname(__file__), "data", "reports")
+RUN_INTERVAL_MINUTES = _env_int("RUN_INTERVAL_MINUTES", 60, minimum=1)
+OPPORTUNITY_THRESHOLD = _env_int("OPPORTUNITY_THRESHOLD", 75, minimum=0, maximum=100)
+WATCHLIST_THRESHOLD = _env_int("WATCHLIST_THRESHOLD", 50, minimum=0, maximum=100)
+STALE_DATA_DAYS = _env_int("STALE_DATA_DAYS", 30, minimum=1)
+MIN_COMP_COUNT = _env_int("MIN_COMP_COUNT", 3, minimum=1)
 
 
 # --- Kern County Tax Auction ---

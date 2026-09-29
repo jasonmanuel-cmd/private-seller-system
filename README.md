@@ -19,7 +19,11 @@ On Linux/macOS, substitute `.venv/bin/python` for `.venv/Scripts/python.exe`.
 ## What the system actually does
 
 - Stores actual imported or manually entered property leads in SQLite.
-- Scores descriptions using keyword, source, and price heuristics. **A score is a research-priority signal, not a valuation, verified equity estimate, or proof of seller motivation.** Confirm details with the owner and authoritative records.
+- Retains immutable property observations and material changes instead of overwriting the only known history.
+- Produces an evidence-adjusted 100-point opportunity score alongside the legacy keyword score. **Neither score is a valuation, verified equity estimate, or proof of seller motivation.**
+- Calculates seller-pressure velocity and a seller-capitulation index only from dated changes such as verified reductions, status transitions, and newly observed listing language.
+- Analyzes supplied comparable sales, rehabilitation ranges, optionality signals, listing quality, data conflicts, and counterfactual scenarios. Missing inputs remain `UNKNOWN`.
+- Generates Top 10, Top 3 deep-dive, watchlist, rejected, and change-event reports without manufacturing enough properties to fill a list.
 - Filters leads, records contacted status, and exports CSV.
 - Offers on-demand source checking with visible progress and per-source outcomes.
 - Separates manual-research resources from real property leads. A search link or a tax-sale brochure is **not** a lead and must never inflate the hot-lead count.
@@ -52,16 +56,107 @@ The previous instructions incorrectly described free persistent storage and a sh
 
 `Dockerfile` runs the same single-process server. Mount persistent storage at `/app/data` and supply `DASHBOARD_TOKEN`; the container refuses an unauthenticated public bind. Docker and Render require their own deployment verification; successful local tests do not prove a cloud deployment.
 
-For local scheduled runs, `run.py --once` checks sources once; `run.py --loop` checks hourly while the process remains running. This does not install an operating-system startup task. Do not run multiple scrape schedulers concurrently.
+For local scheduled runs, `run.py --once` checks sources once and then analyzes stored properties. `run.py --reports-only` recalculates intelligence without source collection. `run.py --loop --interval-minutes 60` repeats safely while the process remains running. A durable database lock prevents overlapping collection cycles. This does not install an operating-system startup task.
+
+## Property-intelligence architecture
+
+```text
+lawful collectors/manual imports
+              ↓
+current lead + immutable observations
+              ↓
+change events and evidence conflicts
+              ↓
+pressure · capitulation · optionality · market/rehab analysis
+              ↓
+evidence-adjusted 0–100 opportunity score
+              ↓
+Top 10 · Top 3 · watchlist · rejected · event reports
+```
+
+The original `leads` table remains the dashboard's current-state projection. The additive `property_observations`, `property_events`, `property_analyses`, and `report_runs` tables preserve history and analysis runs. Reimporting an identical record does not create a false observation or trigger.
+
+### Evidence hierarchy and confidence
+
+The system prefers evidence in this order:
+
+1. Official government/public records.
+2. Original broker or listing information.
+3. Public marketplaces and published notices.
+4. Secondary sources.
+5. Clearly labelled analyst-derived assumptions.
+
+Conflicting claims are retained and flagged rather than silently discarded. An official record may be selected as the working fact while the conflicting listing value remains visible. Confidence grades describe the evidence supplied to this system; they do not guarantee that a deal is correct.
+
+`UNKNOWN` is a deliberate result. It means the system lacks enough supported information and must never be interpreted as zero. Owner identity, zoning/ADU legality, liens, occupancy, permits, motivation, ARV, or rehabilitation cost are never invented from unrelated fields.
+
+### Supplying analysis inputs
+
+Collectors can place structured, sourced inputs inside a lead's `raw_data` JSON. The intelligence engine recognizes:
+
+```json
+{
+  "evidence": [
+    {"field": "sqft", "value": 1520, "source_type": "official", "source": "county assessor", "source_url": "https://official.example/record"}
+  ],
+  "comps": [
+    {"sold_price": 300000, "sold_date": "2026-08-15", "distance_miles": 0.4, "sqft": 1480}
+  ],
+  "rehab": {"low": 30000, "base": 45000, "high": 65000}
+}
+```
+
+Only use comparable sales and costs that you are authorized to use and can trace to a source. Optionality signals raise research priority but do not establish subdivision, ADU, rezoning, or permit feasibility.
+
+## Reports and API
+
+Reports default to `data/reports/` and are excluded from Git because they may contain private research. Every run writes a timestamped archive plus atomic latest files:
+
+- `top-10.csv`
+- `top-3-deep-dive.csv`
+- `watchlist.csv`
+- `rejected.csv`
+- `change-events.csv`
+- `intelligence-report.md`
+
+The dashboard links to these files and exposes authenticated/local-only read APIs at `/api/intelligence`, `/api/properties/<id>/history`, `/api/properties/<id>/analysis`, and `/api/events`. CSV cells are protected against spreadsheet-formula execution. Reports intentionally omit owner/contact fields.
+
+## Configuration
+
+Copy `.env.example` to an untracked `.env` or set host environment variables:
+
+| Setting | Default | Purpose |
+|---|---:|---|
+| `DB_PATH` | `data/leads.db` | Persistent SQLite database |
+| `REPORT_DIR` | `data/reports` | Private report output directory |
+| `RUN_INTERVAL_MINUTES` | `60` | Loop interval |
+| `OPPORTUNITY_THRESHOLD` | `75` | Minimum evidence-gated Top 10 score |
+| `WATCHLIST_THRESHOLD` | `50` | Watchlist score threshold |
+| `STALE_DATA_DAYS` | `30` | Configured review horizon |
+| `MIN_COMP_COUNT` | `3` | Configured comp-quality target |
+
+Invalid numeric configuration fails at startup instead of silently changing behavior.
+
+### Windows unattended example
+
+From an Administrator or ordinary user PowerShell prompt, create a Task Scheduler entry through the Windows UI with:
+
+```text
+Program/script: C:\path\to\private-seller-system-main\.venv\Scripts\python.exe
+Arguments: run.py --once
+Start in: C:\path\to\private-seller-system-main
+```
+
+Set the trigger to the desired local time, enable “Run task as soon as possible after a scheduled start is missed,” and keep the database/report directory on persistent private storage. For cron, run the equivalent absolute Python and `run.py --once` paths. These examples do not install, enable, or verify a scheduler.
 
 ## Verification
 
 ```text
 .venv/Scripts/python.exe -m unittest discover -s tests -v
-.venv/Scripts/python.exe -m compileall -q app.py database.py config.py scoring.py run.py serve.py scrapers
+.venv/Scripts/python.exe -m compileall -q app.py database.py config.py scoring.py run.py serve.py property_intelligence.py intelligence_pipeline.py reports.py scrapers
 ```
 
-`GET /health` checks server/database readiness. Source availability is separate: inspect dashboard source results. This downloaded folder is not necessarily a Git checkout; no GitHub push or deployment is implied by local file changes.
+For an offline report-only verification, run `.venv/Scripts/python.exe run.py --reports-only`. Run it a second time to confirm unchanged observations do not create new events. `GET /health` checks server/database readiness. Source availability is separate: inspect dashboard source results. Passing local tests does not prove an external source is reachable, Task Scheduler is installed, hosted storage is persistent, or a deployment is live.
 
 ## Owner
 

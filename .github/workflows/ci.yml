@@ -23,11 +23,12 @@ jobs:
           pip install -r requirements.txt
           pip install pytest pytest-cov
       - name: Run tests
-        run: python -m pytest tests/ -v --cov=app --cov-report=term-missing || true
+        run: python -m pytest tests/ -v --cov=app --cov=database --cov=property_intelligence --cov=intelligence_pipeline --cov=reports --cov-report=term-missing
       - name: Type check
-        run: python -m py_compile app.py 2>/dev/null || true
+        run: python -m compileall -q app.py config.py database.py scoring.py run.py serve.py property_intelligence.py intelligence_pipeline.py reports.py scrapers
       - name: Lint
-        run: pip install flake8 && python -m flake8 app.py --max-line-length=120 || true
+        continue-on-error: true
+        run: pip install flake8 && python -m flake8 app.py database.py property_intelligence.py intelligence_pipeline.py reports.py --max-line-length=120
 
   security-audit:
     runs-on: ubuntu-latest
@@ -40,4 +41,5 @@ jobs:
       - name: Install safety
         run: pip install safety
       - name: Run security audit
-        run: safety check || true
+        continue-on-error: true
+        run: safety check

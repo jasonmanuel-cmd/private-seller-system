@@ -89,6 +89,8 @@ class DashboardTests(unittest.TestCase):
             self.assertEqual(self.client.get('/', auth=('admin', 'wrong')).status_code, 401)
             self.assertEqual(self.client.get('/', auth=('admin', 'test-only-password')).status_code, 200)
         self.assertEqual(self.client.get('/', base_url='http://evil.example').status_code, 403)
+        self.assertEqual(self.client.get('/', base_url='http://localhost',
+                                         environ_overrides={'REMOTE_ADDR': '203.0.113.10'}).status_code, 403)
 
     def test_csrf_guards_mutations(self):
         for path in ('/add', '/mark_contacted/missing', '/run'):
@@ -162,6 +164,27 @@ class DashboardTests(unittest.TestCase):
 
     def test_bad_filter_is_400_not_crash(self):
         self.assertEqual(self.client.get('/?min_score=oops').status_code, 400)
+
+    def test_intelligence_api_history_and_safe_report_paths(self):
+        database.init_db()
+        database.save_property_analysis('p1', {'property_id': 'p1', 'address': '1 Main',
+            'city': 'Bakersfield', 'score': 88, 'confidence_grade': 'B',
+            'decision': 'top', 'next_action': 'verify condition'})
+        top = self.client.get('/api/intelligence?bucket=top10')
+        self.assertEqual(top.status_code, 200)
+        self.assertEqual(top.json['items'][0]['property_id'], 'p1')
+        self.assertEqual(self.client.get('/api/properties/p1/analysis').status_code, 200)
+        self.assertEqual(self.client.get('/api/properties/missing/analysis').status_code, 404)
+        self.assertEqual(self.client.get('/api/properties/p1/history').status_code, 200)
+        self.assertEqual(self.client.get('/reports/../database.py').status_code, 404)
+        self.assertEqual(self.client.get('/api/intelligence?bucket=bad').status_code, 400)
+        database.save_property_observation('private', {'address': '1 Main', 'owner_name': 'Private',
+            'owner_mailing': 'Private address', 'raw_data': {'phone': '555-0100'}})
+        history = self.client.get('/api/properties/private/history').get_json()['items']
+        snapshot = history[0]['snapshot']
+        self.assertNotIn('owner_name', snapshot)
+        self.assertNotIn('owner_mailing', snapshot)
+        self.assertNotIn('raw_data', snapshot)
 
 
 if __name__ == '__main__':
