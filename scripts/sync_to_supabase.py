@@ -1,6 +1,7 @@
 """Sync local SQLite leads.db into the Supabase lead pipeline (REST-only, no DDL).
 
-Flow: local leads -> raw_lead_intake (REST insert) -> process_pending_intake (RPC)
+Flow: local leads -> private_seller_leads (RPC upsert, read by dashboard/)
+      local leads -> raw_lead_intake (REST insert) -> process_pending_intake (RPC)
 which creates properties, distress_events, lead_scores, and deals rows.
 
 Usage:
@@ -143,6 +144,15 @@ def push_intake_batch(session, batch):
     response.raise_for_status()
 
 
+def push_dashboard(session, leads):
+    """Upsert local leads into private_seller_leads, the table dashboard/ reads."""
+    for i in range(0, len(leads), BATCH):
+        response = session.post(f'{SUPABASE_URL}/rest/v1/rpc/upsert_private_seller_leads',
+                                headers=HEADERS_BASE, json={'payload': leads[i:i + BATCH]}, timeout=60)
+        response.raise_for_status()
+    print(f'Dashboard table: upserted {len(leads)} leads')
+
+
 def run_pipeline(session):
     total_processed = 0
     for _ in range(60):
@@ -196,6 +206,8 @@ def main():
             print(f'  {source}: {count}')
         print('Dry run — nothing synced.')
         return
+
+    push_dashboard(session, leads)
 
     ensure_sources(session)
     print('Sources ensured.')

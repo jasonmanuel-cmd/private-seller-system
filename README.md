@@ -58,6 +58,14 @@ The previous instructions incorrectly described free persistent storage and a sh
 
 For local scheduled runs, `run.py --once` checks sources once and then analyzes stored properties. `run.py --reports-only` recalculates intelligence without source collection. `run.py --loop --interval-minutes 60` repeats safely while the process remains running. A durable database lock prevents overlapping collection cycles. This does not install an operating-system startup task.
 
+## Optional phone/cloud view — Vercel + Supabase
+
+`dashboard/` is a read-and-mark-status view of the leads for use away from this computer. Collection still runs locally; the cloud copy is only as fresh as the last sync.
+
+1. Database (one time): run `supabase/private-seller-leads.sql` in the private Supabase project. The table has row-level security with no public policy and is reachable only with the service-role key.
+2. Vercel (one time): import this repository, set **Root Directory** to `dashboard`, and add `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, and a long random `ADMIN_TOKEN` as environment variables. The token is what you type on the dashboard's sign-in screen.
+3. Sync (whenever you want the cloud copy updated): put `SUPABASE_URL` and `SUPABASE_SECRET_KEY` in an untracked `.env`, then run `.venv/Scripts/python.exe scripts/sync_to_supabase.py`. It upserts every local lead into `private_seller_leads` and also feeds the intake pipeline. Statuses changed in the cloud view are not overwritten by a later sync, and are not copied back to the local database.
+
 ## Property-intelligence architecture
 
 ```text

@@ -72,4 +72,7 @@ begin
 end;
 $$;
 
-revoke all on function upsert_private_seller_leads(json) from anon, authenticated;
+-- Functions are executable by PUBLIC by default, so revoking only anon/authenticated
+-- would leave this security-definer function callable with the anon key.
+revoke all on function upsert_private_seller_leads(json) from public, anon, authenticated;
+grant execute on function upsert_private_seller_leads(json) to service_role;
